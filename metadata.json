@@ -1,0 +1,6 @@
+{
+  "name": "Health and Nutrition Awareness Portal",
+  "description": "Interactive health and nutrition awareness platform featuring baseline and post-program surveys, Indian diet planner, structured learning modules, nutrition quiz, Chart.js impact analytics, and role-based admin dashboard for VTU AEC Lab evaluation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,469 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Pillar 0: Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================
+    // Global Hardened Helpers
+    // =========================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidParticipantId(id) {
+      return id is string && id.size() >= 10 && id.size() <= 32 && id.matches('^HN-[0-9]{4}-[A-Z0-9]{4,8}$');
+    }
+
+    function isValidDateString(val) {
+      return val is string && val.size() == 10 && val.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'veereshveeresh85846@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isBoundedStringList(arr, maxLen) {
+      return arr is list
+        && arr.size() <= maxLen
+        && (arr.size() == 0 || (arr[0] is string && arr[0].size() >= 1 && arr[0].size() <= 120));
+    }
+
+    function isValidResponseList(arr) {
+      return arr is list
+        && arr.size() == 10
+        && arr[0] is int && arr[0] >= 0 && arr[0] <= 3
+        && arr[1] is int && arr[1] >= 0 && arr[1] <= 3
+        && arr[2] is int && arr[2] >= 0 && arr[2] <= 3
+        && arr[3] is int && arr[3] >= 0 && arr[3] <= 3
+        && arr[4] is int && arr[4] >= 0 && arr[4] <= 3
+        && arr[5] is int && arr[5] >= 0 && arr[5] <= 3
+        && arr[6] is int && arr[6] >= 0 && arr[6] <= 3
+        && arr[7] is int && arr[7] >= 0 && arr[7] <= 3
+        && arr[8] is int && arr[8] >= 0 && arr[8] <= 3
+        && arr[9] is int && arr[9] >= 0 && arr[9] <= 3;
+    }
+
+    // =========================================================
+    // Validation Blueprints (Anti-Update-Gap)
+    // =========================================================
+
+    function isValidUserProfile(data, uid) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'role', 'createdAt', 'updatedAt'])
+        && data.uid == uid
+        && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.role in ['participant', 'admin']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRecord(data, uid) {
+      return data.keys().hasAll(['uid', 'email', 'grantedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'grantedAt'])
+        && data.uid == uid
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.grantedAt is timestamp;
+    }
+
+    function isValidParticipant(data, participantId) {
+      return data.keys().hasAll([
+          'participantId', 'ownerUid', 'ageGroup', 'gender', 'educationLevel',
+          'foodHabits', 'preSurveyCompleted', 'postSurveyCompleted', 'preScore',
+          'postScore', 'learningModulesCompleted', 'consentGiven', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'participantId', 'ownerUid', 'ageGroup', 'gender', 'educationLevel',
+          'foodHabits', 'preSurveyCompleted', 'postSurveyCompleted', 'preScore',
+          'postScore', 'learningModulesCompleted', 'consentGiven', 'createdAt', 'updatedAt'
+        ])
+        && data.participantId == participantId
+        && isValidParticipantId(data.participantId)
+        && isValidId(data.ownerUid)
+        && data.ageGroup in ['Under 18', '18-24', '25-34', '35-49', '50+']
+        && data.gender in ['Prefer not to say', 'Female', 'Male', 'Non-binary']
+        && data.educationLevel in ['High School', 'Undergraduate (VTU / College)', 'Postgraduate', 'Working Professional', 'Other']
+        && data.foodHabits in ['Vegetarian', 'Eggetarian', 'Non-Vegetarian', 'Vegan']
+        && data.preSurveyCompleted is bool
+        && data.postSurveyCompleted is bool
+        && data.preScore is number && data.preScore >= 0 && data.preScore <= 100
+        && data.postScore is number && data.postScore >= 0 && data.postScore <= 100
+        && isBoundedStringList(data.learningModulesCompleted, 6)
+        && data.consentGiven == true
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPreSurvey(data, participantId) {
+      return data.keys().hasAll([
+          'participantId', 'ownerUid', 'surveyType', 'responses', 'correctCount',
+          'totalQuestions', 'percentage', 'adoptedHabits', 'consentGiven',
+          'submissionDate', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'participantId', 'ownerUid', 'surveyType', 'responses', 'correctCount',
+          'totalQuestions', 'percentage', 'adoptedHabits', 'consentGiven',
+          'submissionDate', 'createdAt'
+        ])
+        && data.participantId == participantId
+        && isValidParticipantId(data.participantId)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && data.surveyType == 'PRE-SURVEY'
+        && isValidResponseList(data.responses)
+        && data.correctCount is int && data.correctCount >= 0 && data.correctCount <= 10
+        && data.totalQuestions == 10
+        && data.percentage is number && data.percentage >= 0 && data.percentage <= 100
+        && isBoundedStringList(data.adoptedHabits, 8)
+        && data.consentGiven == true
+        && isValidDateString(data.submissionDate)
+        && data.createdAt == request.time;
+    }
+
+    function isValidPostSurvey(data, participantId) {
+      return data.keys().hasAll([
+          'participantId', 'ownerUid', 'surveyType', 'responses', 'correctCount',
+          'totalQuestions', 'percentage', 'adoptedHabits', 'learningFeedback',
+          'rating', 'consentGiven', 'submissionDate', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'participantId', 'ownerUid', 'surveyType', 'responses', 'correctCount',
+          'totalQuestions', 'percentage', 'adoptedHabits', 'learningFeedback',
+          'rating', 'consentGiven', 'submissionDate', 'createdAt'
+        ])
+        && data.participantId == participantId
+        && isValidParticipantId(data.participantId)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && data.surveyType == 'POST-SURVEY'
+        && isValidResponseList(data.responses)
+        && data.correctCount is int && data.correctCount >= 0 && data.correctCount <= 10
+        && data.totalQuestions == 10
+        && data.percentage is number && data.percentage >= 0 && data.percentage <= 100
+        && isBoundedStringList(data.adoptedHabits, 8)
+        && data.learningFeedback is string && data.learningFeedback.size() <= 1000
+        && data.rating is int && data.rating >= 1 && data.rating <= 5
+        && data.consentGiven == true
+        && isValidDateString(data.submissionDate)
+        && data.createdAt == request.time;
+    }
+
+    function isValidPublicMetric(data, metricId) {
+      return data.keys().hasAll([
+          'participantId', 'ownerUid', 'surveyType', 'responses', 'correctCount',
+          'totalQuestions', 'percentage', 'adoptedHabits', 'submissionDate',
+          'isPublicMetric', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'participantId', 'ownerUid', 'surveyType', 'responses', 'correctCount',
+          'totalQuestions', 'percentage', 'adoptedHabits', 'submissionDate',
+          'isPublicMetric', 'createdAt'
+        ])
+        && isValidParticipantId(data.participantId)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && data.surveyType in ['PRE-SURVEY', 'POST-SURVEY']
+        && ((data.surveyType == 'PRE-SURVEY' && metricId == data.participantId + '_PRE')
+          || (data.surveyType == 'POST-SURVEY' && metricId == data.participantId + '_POST'))
+        && isValidResponseList(data.responses)
+        && data.correctCount is int && data.correctCount >= 0 && data.correctCount <= 10
+        && data.totalQuestions == 10
+        && data.percentage is number && data.percentage >= 0 && data.percentage <= 100
+        && isBoundedStringList(data.adoptedHabits, 8)
+        && isValidDateString(data.submissionDate)
+        && data.isPublicMetric == true
+        && data.createdAt == request.time;
+    }
+
+    function isValidQuizResult(data, resultId) {
+      return data.keys().hasAll([
+          'resultId', 'ownerUid', 'participantId', 'correctCount',
+          'incorrectCount', 'totalQuestions', 'percentage', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'resultId', 'ownerUid', 'participantId', 'correctCount',
+          'incorrectCount', 'totalQuestions', 'percentage', 'createdAt'
+        ])
+        && data.resultId == resultId
+        && isValidId(data.resultId)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && data.participantId is string && data.participantId.size() <= 32
+        && data.correctCount is int && data.correctCount >= 0 && data.correctCount <= 15
+        && data.incorrectCount is int && data.incorrectCount >= 0 && data.incorrectCount <= 15
+        && data.totalQuestions == 15
+        && data.correctCount + data.incorrectCount == 15
+        && data.percentage is number && data.percentage >= 0 && data.percentage <= 100
+        && data.createdAt == request.time;
+    }
+
+    function isValidFeedback(data, feedbackId) {
+      return data.keys().hasAll([
+          'feedbackId', 'ownerUid', 'name', 'email', 'category', 'message', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'feedbackId', 'ownerUid', 'name', 'email', 'category', 'message', 'createdAt'
+        ])
+        && data.feedbackId == feedbackId
+        && isValidId(data.feedbackId)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.ownerUid)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && data.email is string && data.email.size() <= 160
+        && data.category in ['General Feedback', 'Program Experience', 'Suggestion', 'Technical Inquiry']
+        && data.message is string && data.message.size() >= 5 && data.message.size() <= 1500
+        && data.createdAt == request.time;
+    }
+
+    function isValidTestimonial(data, testimonialId) {
+      return data.keys().hasAll([
+          'testimonialId', 'authorName', 'roleLabel', 'quote', 'improvementSummary', 'isPublished', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'testimonialId', 'authorName', 'roleLabel', 'quote', 'improvementSummary', 'isPublished', 'createdAt'
+        ])
+        && data.testimonialId == testimonialId
+        && isValidId(data.testimonialId)
+        && data.authorName is string && data.authorName.size() >= 2 && data.authorName.size() <= 80
+        && data.roleLabel is string && data.roleLabel.size() >= 2 && data.roleLabel.size() <= 80
+        && data.quote is string && data.quote.size() >= 10 && data.quote.size() <= 500
+        && data.improvementSummary is string && data.improvementSummary.size() <= 120
+        && data.isPublished is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidEducationalContent(data, contentId) {
+      return data.keys().hasAll([
+          'contentId', 'topic', 'title', 'summary', 'body', 'keyPoints',
+          'readTimeMinutes', 'isPublished', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'contentId', 'topic', 'title', 'summary', 'body', 'keyPoints',
+          'readTimeMinutes', 'isPublished', 'createdAt', 'updatedAt'
+        ])
+        && data.contentId == contentId
+        && isValidId(data.contentId)
+        && data.topic in ['Balanced Diet', 'Macronutrients', 'Micronutrients', 'Healthy Habits', 'Personal Hygiene', 'Healthy Lifestyle']
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 140
+        && data.summary is string && data.summary.size() >= 10 && data.summary.size() <= 400
+        && data.body is string && data.body.size() >= 20 && data.body.size() <= 5000
+        && isBoundedStringList(data.keyPoints, 8)
+        && data.readTimeMinutes is int && data.readTimeMinutes >= 1 && data.readTimeMinutes <= 30
+        && data.isPublished is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // =========================================================
+    // Collection Rules (All 10 Collections Exhaustively Secured)
+    // =========================================================
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && request.auth.uid == userId
+        && isValidUserProfile(incoming(), userId)
+        && incoming().role == 'participant'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            request.auth.uid == userId
+            && incoming().role == existing().role
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    match /admins/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && isValidId(userId)
+        && isValidAdminRecord(incoming(), userId)
+        && incoming().grantedAt == request.time;
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(userId) && userId != request.auth.uid;
+    }
+
+    match /participants/{participantId} {
+      allow get: if isSignedIn()
+        && isValidParticipantId(participantId)
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser()
+        && isValidParticipantId(participantId)
+        && isValidParticipant(incoming(), participantId)
+        && incoming().ownerUid == request.auth.uid
+        && incoming().preSurveyCompleted == true
+        && incoming().postSurveyCompleted == false
+        && incoming().postScore == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && existsAfter(/databases/$(database)/documents/pre_surveys/$(participantId));
+      allow update: if isVerifiedUser()
+        && isValidParticipantId(participantId)
+        && isValidParticipant(incoming(), participantId)
+        && incoming().participantId == existing().participantId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          // Action 1: Update completed learning modules
+          (
+            existing().ownerUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['learningModulesCompleted', 'updatedAt'])
+          ) ||
+          // Action 2: Record post-program survey completion atomically (terminal lock once postSurveyCompleted == true)
+          (
+            existing().ownerUid == request.auth.uid
+            && existing().preSurveyCompleted == true
+            && existing().postSurveyCompleted == false
+            && incoming().postSurveyCompleted == true
+            && incoming().diff(existing()).affectedKeys().hasOnly(['postSurveyCompleted', 'postScore', 'updatedAt'])
+            && existsAfter(/databases/$(database)/documents/post_surveys/$(participantId))
+          )
+        );
+      allow delete: if isAdmin() && isValidParticipantId(participantId);
+    }
+
+    match /pre_surveys/{participantId} {
+      allow get: if isSignedIn()
+        && isValidParticipantId(participantId)
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser()
+        && isValidParticipantId(participantId)
+        && isValidPreSurvey(incoming(), participantId)
+        && existsAfter(/databases/$(database)/documents/participants/$(participantId))
+        && existsAfter(/databases/$(database)/documents/public_survey_metrics/$(participantId + '_PRE'));
+      allow update: if false;
+      allow delete: if isAdmin() && isValidParticipantId(participantId);
+    }
+
+    match /post_surveys/{participantId} {
+      allow get: if isSignedIn()
+        && isValidParticipantId(participantId)
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser()
+        && isValidParticipantId(participantId)
+        && isValidPostSurvey(incoming(), participantId)
+        && exists(/databases/$(database)/documents/pre_surveys/$(participantId))
+        && get(/databases/$(database)/documents/pre_surveys/$(participantId)).data.ownerUid == request.auth.uid
+        && existsAfter(/databases/$(database)/documents/public_survey_metrics/$(participantId + '_POST'));
+      allow update: if false;
+      allow delete: if isAdmin() && isValidParticipantId(participantId);
+    }
+
+    match /public_survey_metrics/{metricId} {
+      allow get: if isValidId(metricId) && existing().isPublicMetric == true;
+      allow list: if existing().isPublicMetric == true;
+      allow create: if isVerifiedUser()
+        && isValidId(metricId)
+        && isValidPublicMetric(incoming(), metricId)
+        && (
+          (incoming().surveyType == 'PRE-SURVEY'
+            && existsAfter(/databases/$(database)/documents/pre_surveys/$(incoming().participantId)))
+          ||
+          (incoming().surveyType == 'POST-SURVEY'
+            && existsAfter(/databases/$(database)/documents/post_surveys/$(incoming().participantId)))
+        );
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(metricId);
+    }
+
+    match /quiz_results/{resultId} {
+      allow get: if isSignedIn()
+        && isValidId(resultId)
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser()
+        && isValidId(resultId)
+        && isValidQuizResult(incoming(), resultId);
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(resultId);
+    }
+
+    match /feedback/{feedbackId} {
+      allow get: if isSignedIn()
+        && isValidId(feedbackId)
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser()
+        && isValidId(feedbackId)
+        && isValidFeedback(incoming(), feedbackId);
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(feedbackId);
+    }
+
+    match /testimonials/{testimonialId} {
+      allow get: if isValidId(testimonialId) && (existing().isPublished == true || isAdmin());
+      allow list: if existing().isPublished == true || isAdmin();
+      allow create: if isAdmin()
+        && isValidId(testimonialId)
+        && isValidTestimonial(incoming(), testimonialId)
+        && incoming().createdAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(testimonialId)
+        && isValidTestimonial(incoming(), testimonialId)
+        && incoming().testimonialId == existing().testimonialId
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(testimonialId);
+    }
+
+    match /educational_content/{contentId} {
+      allow get: if isValidId(contentId) && (existing().isPublished == true || isAdmin());
+      allow list: if existing().isPublished == true || isAdmin();
+      allow create: if isAdmin()
+        && isValidId(contentId)
+        && isValidEducationalContent(incoming(), contentId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(contentId)
+        && isValidEducationalContent(incoming(), contentId)
+        && incoming().contentId == existing().contentId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(contentId);
+    }
+  }
+}
